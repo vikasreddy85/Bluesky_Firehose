@@ -19,7 +19,6 @@ class FileEventHandler(FileSystemEventHandler):
         if event.is_directory:
             return
         if event.src_path.endswith(('.gz')):
-            print(f"Detected new file: {event.src_path}")
             if self.wait_for_file(event.src_path):
                 self.queue.put(event.src_path)
 
@@ -45,7 +44,6 @@ class FileEventHandler(FileSystemEventHandler):
             time.sleep(check_interval)
             elapsed_time += check_interval
 
-        print(f"Warning: File {file_path} might not be fully written after {max_wait} seconds.")
         return False
 
 def process_file(file_path):
@@ -78,7 +76,6 @@ def get_file_list(directory, starting_file=None):
             start_index = files.index(starting_file)
             return files[start_index:]
         else:
-            print(f"Warning: Starting file {starting_file} not found. Processing all files instead.")
             return files
     
     return files
