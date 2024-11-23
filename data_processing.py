@@ -161,8 +161,9 @@ async def process_file_pair(processed_file: str, corresponding_file: str, short_
         print(f"Total Links: {stats['total_links']}")
         print(f"Total Above 60: {stats['above_60']}")
         print(f"Total Below 60: {stats['below_60']}")
-        file_path = "total_urls.txt"
-        with open(file_path, "w") as f:
+        file_path = processed_file.rsplit('/', 1)[-1].replace('processed_', '').replace('.json', '')
+        new_file_path = os.path.join('./Payload/Urls', file_path  + '.txt')
+        with open(new_file_path, "w") as f:
             for url in total_urls:
                 f.write(f"{url}\n")
     except Exception as e:
@@ -171,9 +172,9 @@ async def process_file_pair(processed_file: str, corresponding_file: str, short_
 async def main():
     await load_domain_scores()
     shorturl_services = load_short_url_domains("shorturl-services-list.csv")
-    destination_path = re.sub(r'(?<=Payload/)[^/]+(?=/)', 'processed_reposts_and_likes', sys.argv[1]).replace('.gz', '')
-    destination_path = re.sub(r'([^/]+)$', r'processed_\1', destination_path)
-    await process_file_pair(destination_path, sys.argv[1], shorturl_services)
+    # destination_path = re.sub(r'(?<=Payload/)[^/]+(?=/)', 'processed_reposts_and_likes', sys.argv[1]).replace('.gz', '')
+    # destination_path = re.sub(r'([^/]+)$', r'processed_\1', destination_path)
+    await process_file_pair("/Users/vikas/Desktop/Bluesky_Firehose/Payload/processed_reposts_and_likes/processed_2024-11-23_16-35-51.json", "/Users/vikas/Desktop/Bluesky_Firehose/Payload/2024-11-23/2024-11-23_16-35-51.json.gz", shorturl_services)
 
 if __name__ == "__main__":
     asyncio.run(main())

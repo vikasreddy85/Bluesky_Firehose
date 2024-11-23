@@ -1,20 +1,9 @@
-import json
-import asyncio
-import websockets
-import os
-import gzip
-import logging
+import json, asyncio, websockets, os, logging, gzip, time
 from datetime import datetime
-from threading import Lock
+from collections import deque
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-)
-
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 current_day_folder = None
-messages_buffer = []
-buffer_lock = Lock()
 
 def ensure_daily_folder():
     global current_day_folder
@@ -25,37 +14,6 @@ def ensure_daily_folder():
             os.makedirs(new_folder_path)
         current_day_folder = new_folder_path
     return current_day_folder
-
-def write_messages_to_file():
-    global messages_buffer
-    with buffer_lock:
-        if not messages_buffer:
-            return None
-        folder_path = ensure_daily_folder()
-        filename = f"{folder_path}/{datetime.now().strftime('%Y-%m-%d_%H:%M:%S')}.json"
-        try:
-            with open(filename, 'w', encoding='utf-8') as f:
-                json.dump(messages_buffer, f, indent=3, ensure_ascii=False, separators=(',', ':'))
-            messages_buffer.clear()
-            return filename
-        except Exception as e:
-            logging.error(f"Error writing messages to file: {e}")
-            return None
-
-def compress_file(filename):
-    if not filename or not os.path.exists(filename):
-        return
-    
-    try:
-        with open(filename, 'rb') as f_in:
-            compressed_filename = f"{filename}.gz"
-            with gzip.open(compressed_filename, 'wb') as f_out:
-                f_out.writelines(f_in)
-        os.remove(filename)
-        return compressed_filename
-    except Exception as e:
-        logging.error(f"Error compressing file {filename}: {e}")
-        return None
 
 def extract_uris(data):
     uri_list = []
@@ -68,9 +26,7 @@ def extract_uris(data):
             uri_list.extend(extract_uris(item))
     return list(set(uri_list))
 
-async def connect_and_collect(url="wss://jetstream1.us-east.bsky.network/subscribe?wantedCollections=app.bsky.feed.post&wantedCollections=app.bsky.feed.like&wantedCollections=app.bsky.feed.repost"):
-    global messages_buffer
-
+async def connect_and_collect(queue, url="wss://jetstream1.us-east.bsky.network/subscribe?wantedCollections=app.bsky.feed.post&wantedCollections=app.bsky.feed.like&wantedCollections=app.bsky.feed.repost"):
     while True:
         try:
             async with websockets.connect(url) as websocket:
@@ -85,31 +41,45 @@ async def connect_and_collect(url="wss://jetstream1.us-east.bsky.network/subscri
                             else:
                                 message_json["urls"] = []
                             message_json['timestamp'] = datetime.now().isoformat()
-                            with buffer_lock:
-                                messages_buffer.append(message_json)
+                            await queue.put(message_json)
                         except json.JSONDecodeError:
-                            pass
+                            logging.warning("Failed to decode message JSON")
                     except websockets.ConnectionClosed:
+                        logging.warning("WebSocket connection closed")
                         break
         except Exception as e:
-            logging.error(f"Error in WebSocket connection: {e}")
-            await asyncio.sleep(5)
+            logging.error(f"WebSocket error: {e}")
+            await asyncio.sleep(0.1)
 
-async def write_and_compress_every_interval(interval=3600):
+async def compress_periodically(queue, interval=3600):
     while True:
-        await asyncio.sleep(interval)
-        try:
-            filename = write_messages_to_file()
-            if filename:
-                compress_file(filename)
-        except Exception as e:
-            logging.error(f"Error during write and compress operation: {e}")
+        folder_path = ensure_daily_folder()
+        timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+        filename = f"{timestamp}.json.gz"
+        full_path = os.path.join(folder_path, filename)        
+        buffer = deque()
+        start_time = time.time()
+
+        while (time.time() - start_time) < interval:
+            try:
+                message = await asyncio.wait_for(queue.get(), timeout=interval - (time.time() - start_time))
+                buffer.append(message)
+            except asyncio.TimeoutError:
+                continue
+
+        if buffer:
+            buffer_json = json.dumps(list(buffer), indent=3, ensure_ascii=False, separators=(',', ':'))
+            try:
+                with gzip.open(full_path, 'wt', encoding='utf-8') as f:
+                    f.write(buffer_json)
+            except Exception as e:
+                logging.error(f"Compression error: {e}")
+        while not queue.empty():
+            queue.get_nowait()
 
 async def main():
-    await asyncio.gather(
-        connect_and_collect(),
-        write_and_compress_every_interval(),
-    )
+    queue = asyncio.Queue()
+    await asyncio.gather(connect_and_collect(queue), compress_periodically(queue))
 
 if __name__ == "__main__":
     try:
