@@ -6,6 +6,13 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 current_day_folder = None
 
 def ensure_daily_folder():
+    """
+    Ensures that a folder for the current day exists under the './Payload' directory.
+    If the folder for today doesn't exist, it creates one.
+
+    Returns:
+        str: The path of the current day's folder.
+    """
     global current_day_folder
     today = datetime.now().strftime('%Y-%m-%d')
     new_folder_path = f"./Payload/{today}"
@@ -15,18 +22,15 @@ def ensure_daily_folder():
         current_day_folder = new_folder_path
     return current_day_folder
 
-def extract_uris(data):
-    uri_list = []
-    if isinstance(data, dict):
-        url = data.get('embed', {}).get('external', {}).get('uri')
-        if url:
-            uri_list.append(url)
-    elif isinstance(data, list):
-        for item in data:
-            uri_list.extend(extract_uris(item))
-    return list(set(uri_list))
-
 async def connect_and_collect(queue, url="wss://jetstream1.us-east.bsky.network/subscribe?wantedCollections=app.bsky.feed.post&wantedCollections=app.bsky.feed.like&wantedCollections=app.bsky.feed.repost"):
+    """
+    Connects to a WebSocket server, subscribes to post, repost, and like collections, and collects messages.
+    Puts the collected messages into the provided queue.
+
+    Parameters:
+        queue (asyncio.Queue): The queue to store the collected messages.
+        url (str, optional): The WebSocket URL to connect to. Defaults to the provided default URL.
+    """
     while True:
         try:
             async with websockets.connect(url) as websocket:
@@ -35,12 +39,6 @@ async def connect_and_collect(queue, url="wss://jetstream1.us-east.bsky.network/
                         message = await websocket.recv()
                         try:
                             message_json = json.loads(message)
-                            if message_json.get('commit', {}).get('collection') == "app.bsky.feed.post":
-                                urls = extract_uris(message_json.get('commit', {}).get('record', {}))
-                                message_json["urls"] = urls
-                            else:
-                                message_json["urls"] = []
-                            message_json['timestamp'] = datetime.now().isoformat()
                             await queue.put(message_json)
                         except json.JSONDecodeError:
                             logging.warning("Failed to decode message JSON")
@@ -49,14 +47,16 @@ async def connect_and_collect(queue, url="wss://jetstream1.us-east.bsky.network/
                         break
         except Exception as e:
             logging.error(f"WebSocket error: {e}")
-            await asyncio.sleep(0.1)
 
 async def compress_periodically(queue, interval=3600):
-    while True:
-        folder_path = ensure_daily_folder()
-        timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-        filename = f"{timestamp}.json.gz"
-        full_path = os.path.join(folder_path, filename)        
+    """
+    Compresses the messages collected in the queue and writes them to a `.json.gz` file every hour.
+
+    Parameters:
+        queue (asyncio.Queue): The queue to collect messages from.
+        interval (int, optional): The interval in seconds to wait before compressing. Defaults to 1 hour.
+    """
+    while True:      
         buffer = deque()
         start_time = time.time()
 
@@ -68,16 +68,24 @@ async def compress_periodically(queue, interval=3600):
                 continue
 
         if buffer:
-            buffer_json = json.dumps(list(buffer), indent=3, ensure_ascii=False, separators=(',', ':'))
+            folder_path = ensure_daily_folder()
+            timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+            filename = f"{timestamp}.json.gz"
+            full_path = os.path.join(folder_path, filename)  
             try:
-                with gzip.open(full_path, 'wt', encoding='utf-8') as f:
-                    f.write(buffer_json)
+               with gzip.open(full_path, 'wt', encoding='utf-8') as f:
+                for obj in buffer:
+                    obj_json = json.dumps(obj, ensure_ascii=False, separators=(',', ':'))
+                    f.write(obj_json + '\n')
             except Exception as e:
                 logging.error(f"Compression error: {e}")
         while not queue.empty():
             queue.get_nowait()
 
 async def main():
+    """
+    Initializes an asyncio queue and runs the connection and compression tasks.
+    """
     queue = asyncio.Queue()
     await asyncio.gather(connect_and_collect(queue), compress_periodically(queue))
 
